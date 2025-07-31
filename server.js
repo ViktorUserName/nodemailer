@@ -1,9 +1,18 @@
 require('dotenv').config();
 const http = require('node:http');
-const { sendContactEmail } = require('./nodemailerHandler');
+// const { sendContactEmail } = require('./nodemailerHandler');
+const crypto = require('crypto');
+
+const amqp = require('amqplib');
+const RABBITMQ_URL = process.env.RABBITMQ_URL || 'amqp://localhost';
+const QUEUE_NAME = 'contact_messages';
 
 const hostname = '127.0.0.1';
 const port = 8501;
+
+
+
+
 
 const server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -37,9 +46,34 @@ const server = http.createServer((req, res) => {
                     return; 
                 }
 
+                const djangoTaskName = 'contact.tasks.send_mail_task';
+                const taskArgs = [name, email, message];
+                const taskId = crypto.randomUUID();
+                const celeryMessage = {
+                    id: taskId,
+                    task: djangoTaskName,
+                    args:taskArgs,
+                    kwargs:{},
+                }
 
-                await sendContactEmail({ name, email, message }); 
-                console.log('Контактное сообщение успешно обработано и email отправлен.');
+                const connection = await amqp.connect(RABBITMQ_URL)
+                const channel = await connection.createChannel()
+                await channel.assertQueue(QUEUE_NAME, {durable: true})
+
+                channel.sendToQueue(
+                    QUEUE_NAME, 
+                    Buffer.from(JSON.stringify(celeryMessage)), 
+                    { 
+                        persistent: true,
+                        contentType: 'application/json' // <-- Это обязательно!
+                    }
+                );
+                console.log (`[x] отправлено сообщение в Ребит: ${JSON.stringify(celeryMessage)}`);
+
+
+
+                // await sendContactEmail({ name, email, message }); 
+                // console.log('Контактное сообщение успешно обработано и email отправлен.');
 
                 res.statusCode = 200; 
                 res.end(JSON.stringify({ success: "Message received and email sent" }));
